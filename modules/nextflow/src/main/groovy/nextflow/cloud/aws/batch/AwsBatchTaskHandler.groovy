@@ -128,6 +128,7 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
                 cliPath: executor.getSession().getExecConfigProp(name,'awscli',null) as String,
                 storageClass: executor.getSession().config.navigate('aws.client.uploadStorageClass') as String,
                 storageEncryption: executor.getSession().config.navigate('aws.client.storageEncryption') as String,
+                mountPoint: executor.getSession().config.navigate('aws.mountPoint', '/tmp') as String,
                 remoteBinDir: executor.remoteBinDir as String,
                 region: executor.getSession().config.navigate('aws.region') as String
         )
@@ -376,6 +377,11 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
         result.setJobDefinitionName(name)
         result.setType(JobDefinitionType.Container)
 
+        def mountPointPath = getAwsOptions().mountPoint
+        def tmpdir = new KeyValuePair()
+        tmpdir.setName("TMPDIR")
+        tmpdir.setValue(mountPointPath)
+
         // container definition
         def container = new ContainerProperties()
                 .withImage(image)
@@ -383,7 +389,23 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
                 .withCommand('true')
                 .withMemory(1024)
                 .withVcpus(1)
+                .withEnvironment([tmpdir])
+
         def awscli = getAwsOptions().cliPath
+        def mounts = new LinkedList<MountPoint>()
+        def volumes = new LinkedList<Volume>()
+        def mountPointName = 'mount'
+        def mountWorkDir = new MountPoint()
+                    .withSourceVolume(mountPointName)
+                    .withContainerPath(mountPointPath)
+                    .withReadOnly(false)
+        mounts.add(mountWorkDir)
+        def volumeWorkDir = new Volume()
+                .withName(mountPointName)
+                .withHost(new Host()
+                .withSourcePath(mountPointPath))
+        volumes.add(volumeWorkDir)
+
         if( awscli ) {
             def mountName = 'aws-cli'
             def path = Paths.get(awscli).parent.parent.toString()
@@ -391,14 +413,17 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
                     .withSourceVolume(mountName)
                     .withContainerPath(path)
                     .withReadOnly(true)
-            container.setMountPoints([mount])
+            mounts.add(mount)
 
             def vol = new Volume()
                     .withName(mountName)
                     .withHost(new Host()
                     .withSourcePath(path))
-            container.setVolumes([vol])
+            volumes.add(vol)
         }
+        container.setMountPoints(mounts)
+        container.setVolumes(volumes)
+
         result.setContainerProperties(container)
 
         // create a job marker uuid
