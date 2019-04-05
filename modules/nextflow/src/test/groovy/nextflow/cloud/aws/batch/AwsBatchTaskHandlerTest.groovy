@@ -457,25 +457,35 @@ class AwsBatchTaskHandlerTest extends Specification {
         def result = handler.makeJobDefRequest(IMAGE)
         then:
         1 * handler.normalizeJobDefinitionName(IMAGE) >> JOB_NAME
-        1 * handler.getAwsOptions() >> new AwsOptions()
+        2 * handler.getAwsOptions() >> new AwsOptions()
         result.jobDefinitionName == JOB_NAME
         result.type == 'container'
         result.parameters.'nf-token' == 'fdb5ef295f566138a43252b2ea272282'
-        !result.containerProperties.mountPoints
+        result.containerProperties.mountPoints[0].sourceVolume == 'mount'
+        !result.containerProperties.mountPoints[0].readOnly
 
         when:
         result = handler.makeJobDefRequest(IMAGE)
         then:
         1 * handler.normalizeJobDefinitionName(IMAGE) >> JOB_NAME
-        1 * handler.getAwsOptions() >> new AwsOptions(cliPath: '/home/conda/bin/aws')
+        2 * handler.getAwsOptions() >> new AwsOptions(cliPath: '/home/conda/bin/aws', mountPoint: '/tmp')
         result.jobDefinitionName == JOB_NAME
         result.type == 'container'
         result.parameters.'nf-token' == '9c56fd073d32e0c29f51f12afdfe4750'
-        result.containerProperties.mountPoints[0].sourceVolume == 'aws-cli'
-        result.containerProperties.mountPoints[0].containerPath == '/home/conda'
-        result.containerProperties.mountPoints[0].readOnly
-        result.containerProperties.volumes[0].host.sourcePath == '/home/conda'
-        result.containerProperties.volumes[0].name == 'aws-cli'
+        result.containerProperties.mountPoints[0].sourceVolume == 'mount'
+        result.containerProperties.mountPoints[0].containerPath == '/tmp'
+        !result.containerProperties.mountPoints[0].readOnly
+        result.containerProperties.volumes[0].host.sourcePath == '/tmp'
+        result.containerProperties.volumes[0].name == 'mount'
+
+        result.containerProperties.mountPoints[1].sourceVolume == 'aws-cli'
+        result.containerProperties.mountPoints[1].containerPath == '/home/conda'
+        result.containerProperties.mountPoints[1].readOnly
+        result.containerProperties.volumes[1].host.sourcePath == '/home/conda'
+        result.containerProperties.volumes[1].name == 'aws-cli'
+
+        result.containerProperties.environment[0].name == "TMPDIR"
+        result.containerProperties.environment[0].value == "/tmp"
 
     }
 

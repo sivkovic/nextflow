@@ -42,6 +42,8 @@ class AwsOptions {
 
     String region
 
+    String mountPoint
+
     AwsOptions() { }
 
     AwsOptions(Session session) {
@@ -75,6 +77,15 @@ class AwsOptions {
             if( !value.startsWith('/') ) throw new ProcessUnrecoverableException("Not a valid aws-cli tools path: $value -- it must be an absolute path")
             if( !value.endsWith('/bin/aws')) throw new ProcessUnrecoverableException("Not a valid aws-cli tools path: $value -- it must end with the `/bin/aws` suffix")
             this.cliPath = value
+        }
+    }
+
+    void setMountPath(String value) {
+        if( !value )
+            this.mountPoint = '/tmp'
+        else {
+            if (!value.startsWith('/')) throw new ProcessUnrecoverableException("Not a valid mount path: $value -- it must be an absolute path")
+            this.mountPoint = value
         }
     }
 
