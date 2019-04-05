@@ -378,9 +378,6 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
         result.setType(JobDefinitionType.Container)
 
         def mountPointPath = getAwsOptions().mountPoint
-        def tmpdir = new KeyValuePair()
-        tmpdir.setName("TMPDIR")
-        tmpdir.setValue(mountPointPath)
 
         // container definition
         def container = new ContainerProperties()
@@ -389,7 +386,6 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
                 .withCommand('true')
                 .withMemory(1024)
                 .withVcpus(1)
-                .withEnvironment([tmpdir])
 
         def awscli = getAwsOptions().cliPath
         def mounts = new LinkedList<MountPoint>()
@@ -427,7 +423,7 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
         result.setContainerProperties(container)
 
         // create a job marker uuid
-        def uuid = CacheHelper.hasher([name, image, awscli, tmpdir]).hash().toString()
+        def uuid = CacheHelper.hasher([name, image, awscli]).hash().toString()
         result.setParameters(['nf-token':uuid])
 
         return result
