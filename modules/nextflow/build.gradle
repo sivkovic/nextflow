@@ -33,13 +33,14 @@ dependencies {
     compile("com.esotericsoftware.kryo:kryo:2.24.0") { exclude group: 'com.esotericsoftware.minlog', module: 'minlog' }
     compile('org.iq80.leveldb:leveldb:0.10')
     compile('org.eclipse.jgit:org.eclipse.jgit:5.2.1.201812262042-r')
-    compile('io.nextflow:nxf-s3fs:1.0.4') {
+    compile('io.nextflow:nxf-s3fs:1.0.5') {
         exclude group: 'org.apache.tika', module: 'tika-core'
         exclude group: 'com.amazonaws', module: 'aws-java-sdk-s3'
     }
-    compile ('com.amazonaws:aws-java-sdk-s3:1.11.470')
-    compile ('com.amazonaws:aws-java-sdk-ec2:1.11.470')
-    compile ('com.amazonaws:aws-java-sdk-batch:1.11.470')
+    compile ('com.amazonaws:aws-java-sdk-s3:1.11.542')
+    compile ('com.amazonaws:aws-java-sdk-ec2:1.11.542')
+    compile ('com.amazonaws:aws-java-sdk-batch:1.11.542')
+    compile ('com.amazonaws:aws-java-sdk-iam:1.11.542')
     compile ('javax.activation:activation:1.1.1')
     compile ('javax.mail:mail:1.4.7')
     compile ('org.yaml:snakeyaml:1.18')

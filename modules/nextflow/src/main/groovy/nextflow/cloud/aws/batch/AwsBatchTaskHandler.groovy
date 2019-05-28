@@ -37,7 +37,6 @@ import com.amazonaws.services.batch.model.RetryStrategy
 import com.amazonaws.services.batch.model.SubmitJobRequest
 import com.amazonaws.services.batch.model.TerminateJobRequest
 import com.amazonaws.services.batch.model.Volume
-import groovy.transform.Memoized
 import groovy.util.logging.Slf4j
 import nextflow.exception.ProcessUnrecoverableException
 import nextflow.processor.BatchContext
@@ -119,20 +118,7 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
     /**
      * @return An instance of {@link AwsOptions} holding Batch specific settings
      */
-    @Memoized
-    protected AwsOptions getAwsOptions() {
-
-        final name = executor.name
-
-        new AwsOptions(
-                cliPath: executor.getSession().getExecConfigProp(name,'awscli',null) as String,
-                storageClass: executor.getSession().config.navigate('aws.client.uploadStorageClass') as String,
-                storageEncryption: executor.getSession().config.navigate('aws.client.storageEncryption') as String,
-                remoteBinDir: executor.remoteBinDir as String,
-                region: executor.getSession().config.navigate('aws.region') as String
-        )
-
-    }
+    protected AwsOptions getAwsOptions() { executor.getAwsOptions() }
 
     /**
      * Set the batch collector object. This has not to be confused AWSBatch.
@@ -373,39 +359,78 @@ class AwsBatchTaskHandler extends TaskHandler implements BatchHandler<String,Job
     protected RegisterJobDefinitionRequest makeJobDefRequest(String image) {
         final name = normalizeJobDefinitionName(image)
         final result = new RegisterJobDefinitionRequest()
+        final opts = getAwsOptions()
         result.setJobDefinitionName(name)
         result.setType(JobDefinitionType.Container)
 
+
         // container definition
-        def container = new ContainerProperties()
+        final container = new ContainerProperties()
                 .withImage(image)
         // note the actual command, memory and cpus are overridden when the job is executed
                 .withCommand('true')
                 .withMemory(1024)
                 .withVcpus(1)
-        def awscli = getAwsOptions().cliPath
+
+        final jobRole = opts.getJobRole()
+        if( jobRole )
+            container.setJobRoleArn(jobRole)
+        
+        final mountsMap = new LinkedHashMap( 10)
+        final awscli = opts.cliPath
         if( awscli ) {
-            def mountName = 'aws-cli'
             def path = Paths.get(awscli).parent.parent.toString()
+            mountsMap.put('aws-cli', "$path:$path:ro")
+        }
+
+        int c=0
+        final volumes = opts.getVolumes()
+        for( String vol : volumes ) {
+            mountsMap.put("vol-"+(++c), vol)
+        }
+
+        if( mountsMap )
+            addVolumeMountsToContainer(mountsMap, container)
+
+        // finally set the container options
+        result.setContainerProperties(container)
+
+        // create a job marker uuid
+        def uuid = CacheHelper.hasher([name, image, awscli, volumes, jobRole]).hash().toString()
+        result.setParameters(['nf-token':uuid])
+
+        return result
+    }
+
+    protected void addVolumeMountsToContainer(Map<String,String> mountsMap, ContainerProperties container) {
+        final mounts = new ArrayList<MountPoint>(mountsMap.size())
+        final volumes = new  ArrayList<Volume>(mountsMap.size())
+        for( Map.Entry<String,String> entry : mountsMap.entrySet() ) {
+            final mountName = entry.key
+            final parts = entry.value.tokenize(':')
+            final containerPath = parts[0]
+            final hostPath = parts.size()>1 ? parts[1] : containerPath
+            final readOnly = parts.size()>2 ? parts[2]=='ro' : false
+            if( parts.size()>3 )
+                throw new IllegalArgumentException("Not a valid volume mount syntax: $entry.value")
+
             def mount = new MountPoint()
                     .withSourceVolume(mountName)
-                    .withContainerPath(path)
-                    .withReadOnly(true)
-            container.setMountPoints([mount])
+                    .withContainerPath(hostPath)
+                    .withReadOnly(readOnly)
+            mounts << mount
 
             def vol = new Volume()
                     .withName(mountName)
                     .withHost(new Host()
-                    .withSourcePath(path))
-            container.setVolumes([vol])
+                    .withSourcePath(containerPath))
+            volumes << vol
         }
-        result.setContainerProperties(container)
 
-        // create a job marker uuid
-        def uuid = CacheHelper.hasher([name, image, awscli]).hash().toString()
-        result.setParameters(['nf-token':uuid])
-
-        return result
+        if( mountsMap ) {
+            container.setMountPoints(mounts)
+            container.setVolumes(volumes)
+        }
     }
 
     /**

@@ -15,11 +15,14 @@
  */
 
 package nextflow.executor
-import java.nio.file.Path
 
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.util.regex.Pattern
+
+import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.processor.TaskRun
-import nextflow.util.MemoryUnit
 /**
  * Processor for LSF resource manager
  *
@@ -33,7 +36,21 @@ import nextflow.util.MemoryUnit
 @Slf4j
 class LsfExecutor extends AbstractGridExecutor {
 
-    private static char BLANK = ' ' as char
+    static private Pattern KEY_REGEX = ~/^[A-Z_0-9]+=.*/
+
+    static private Pattern QUOTED_STRING_REGEX = ~/"((?:[^"\\]|\\.)*)"(\s*#.*)?/
+
+    @PackageScope boolean perJobMemLimit
+
+    @PackageScope boolean perTaskReserve
+
+    /*
+     * If LSF_UNIT_FOR_LIMITS is not defined in lsf.conf, then the default setting is in KB, and for RUSAGE it is MB
+     * see https://www.ibm.com/support/knowledgecenter/en/SSETD4_9.1.3/lsf_config_ref/lsf.conf.lsf_unit_for_limits.5.html
+     */
+    @PackageScope String memUnit = 'KB'
+
+    @PackageScope String usageUnit = 'MB'
 
     /**
      * Gets the directives to submit the specified task to the cluster for execution
@@ -67,20 +84,16 @@ class LsfExecutor extends AbstractGridExecutor {
             // depending a system configuration setting -- see https://www.ibm.com/support/knowledgecenter/SSETD4_9.1.3/lsf_config_ref/lsf.conf.lsb_job_memlimit.5.dita
             // When per-process is used (default) the amount of requested memory
             // is divided by the number of used cpus (processes)
-            if( task.config.cpus > 1 && !perJobMemLimit ) {
-                long bytes = mem.toBytes().intdiv(task.config.cpus as int)
-                result << '-M' << String.valueOf(MemoryUnit.of(bytes).toMega())
-            }
-            else {
-                result << '-M' << String.valueOf(mem.toMega())
-            }
+            def mem1 = ( task.config.cpus > 1 && !perJobMemLimit ) ? mem.div(task.config.cpus as int) : mem
+            def mem2 = ( task.config.cpus > 1 && perTaskReserve ) ? mem.div(task.config.cpus as int) : mem
 
-            result << '-R' << "select[mem>=${mem.toMega()}] rusage[mem=${mem.toMega()}]".toString()
+            result << '-M' << String.valueOf(mem1.toUnit(memUnit))
+            result << '-R' << "select[mem>=${mem.toUnit(memUnit)}] rusage[mem=${mem2.toUnit(usageUnit)}]".toString()
         }
 
         def disk = task.config.getDisk()
         if( disk ) {
-            result << '-R' << "select[tmp>=$disk.mega] rusage[tmp=$disk.mega]".toString()
+            result << '-R' << "select[tmp>=${disk.toUnit(memUnit)}] rusage[tmp=${disk.toUnit(usageUnit)}]".toString()
         }
 
         // -- the job name
@@ -92,9 +105,6 @@ class LsfExecutor extends AbstractGridExecutor {
         return result
     }
 
-    protected boolean isPerJobMemLimit() {
-        session.getExecConfigProp(name, 'perJobMemLimit', false)
-    }
 
     /**
      * The command line to submit this job
@@ -206,6 +216,78 @@ class LsfExecutor extends AbstractGridExecutor {
         }
 
         return needWrap ? "\"$str\"" : str
+    }
+
+    protected getEnv0(String name) {
+        System.getenv(name)
+    }
+
+    /**
+     * parse the memory units from $LSF_ENVDIR/lsf.conf,
+     * which should be accessible via all nodes. Otherwise, default is KB
+     * -- see https://www.ibm.com/support/knowledgecenter/en/SSETD4_9.1.3/lsf_config_ref/lsf.conf.lsf_unit_for_limits.5.html
+     */
+    protected Map<String,String> parseLsfConfig() {
+        def result = new LinkedHashMap<>(20)
+
+        // check environment variable exists
+        def envDir = getEnv0('LSF_ENVDIR')
+        if ( !envDir )
+            return result
+        def envFile = Paths.get(envDir).resolve("lsf.conf")
+        if ( !envFile.exists() )
+            return result
+
+        for (def line : envFile.readLines() ){
+            if( !KEY_REGEX.matcher(line).matches() )
+                continue
+            def entry = line.tokenize('=')
+            if( entry.size() != 2 )
+                continue
+            def (String key,String value) = entry
+            def matcher = QUOTED_STRING_REGEX.matcher(value)
+            if( matcher.matches() ) {
+                value = matcher.group(1)
+            }
+            else {
+                int p = value.indexOf('#')
+                value = p==-1 ? value.trim() : value.substring(0,p).trim()
+            }
+
+            result.putAt(key,value)
+        }
+
+        return result
+    }
+
+    @Override
+    void register() {
+        def conf = parseLsfConfig()
+
+        // lsf mem unit
+        // https://www.ibm.com/support/knowledgecenter/en/SSETD4_9.1.3/lsf_config_ref/lsf.conf.lsf_unit_for_limits.5.html
+        if( conf.get('LSF_UNIT_FOR_LIMITS') ) {
+            memUnit = usageUnit = conf.get('LSF_UNIT_FOR_LIMITS')
+            log.debug "[LSF] Detected lsf.conf LSF_UNIT_FOR_LIMITS=$memUnit"
+        }
+        
+        // per job mem limit
+        // https://www.ibm.com/support/knowledgecenter/SSETD4_9.1.3/lsf_config_ref/lsf.conf.lsb_job_memlimit.5.dita
+        if( conf.get('LSB_JOB_MEMLIMIT') ) {
+            final str = conf.get('LSB_JOB_MEMLIMIT').toUpperCase()
+            perJobMemLimit = str == 'Y'
+            log.debug "[LSF] Detected lsf.conf LSB_JOB_MEMLIMIT=$str ($perJobMemLimit)"
+        }
+        else {
+            perJobMemLimit = session.getExecConfigProp(name, 'perJobMemLimit', false)
+        }
+
+        // per task reserve https://github.com/nextflow-io/nextflow/issues/1071#issuecomment-481412239
+        if( conf.get('RESOURCE_RESERVE_PER_TASK') ) {
+            final str = conf.get('RESOURCE_RESERVE_PER_TASK').toUpperCase()
+            perTaskReserve = str == 'Y'
+            log.debug "[LSF] Detected lsf.conf RESOURCE_RESERVE_PER_TASK=$str ($perJobMemLimit)"
+        }
     }
 
 }

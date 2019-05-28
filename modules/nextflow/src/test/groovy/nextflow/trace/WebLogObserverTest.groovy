@@ -19,14 +19,17 @@ package nextflow.trace
 
 import spock.lang.Specification
 
+import groovy.json.JsonGenerator
 import groovy.json.JsonSlurper
 import nextflow.Session
 import nextflow.processor.TaskHandler
+import nextflow.script.ScriptBinding
+import nextflow.script.WorkflowMetadata
 import nextflow.util.SimpleHttpClient
 
-class WebLogObserverTest extends Specification{
+class WebLogObserverTest extends Specification {
 
-    def 'do not send messages on wrong formatted url' () {
+    def 'do not send messages on wrong formatted url'() {
 
         when:
         new WebLogObserver("localhost")
@@ -38,26 +41,33 @@ class WebLogObserverTest extends Specification{
     def 'send message on different workflow events' () {
 
         given:
-        def httpPostObserver0 = Spy(WebLogObserver, constructorArgs: ["http://localhost"])
+        WebLogObserver httpPostObserver0 = Spy(WebLogObserver, constructorArgs: ["http://localhost"])
+        WorkflowMetadata workflowMeta = Mock(WorkflowMetadata)
+
+        def bindingStub = Mock(ScriptBinding){
+            getProperty('params') >> new ScriptBinding.ParamsMap()
+        }
         def sessionStub = Mock(Session){
             getRunName() >> "testRun"
             getUniqueId() >> UUID.randomUUID()
+            getBinding() >> bindingStub
+            getWorkflowMetadata() >> workflowMeta
         }
         def traceStub = Mock(TraceRecord)
         def handlerStub = Mock(TaskHandler)
 
         when:
+        def payload = WebLogObserver.createFlowPayloadFromSession(sessionStub)
         httpPostObserver0.onFlowStart(sessionStub)
-        httpPostObserver0.onFlowComplete()
         httpPostObserver0.onProcessSubmit(handlerStub, traceStub)
         httpPostObserver0.onProcessStart(handlerStub, traceStub)
         httpPostObserver0.onProcessComplete(handlerStub, traceStub)
         httpPostObserver0.onFlowError(handlerStub, traceStub)
+        httpPostObserver0.onFlowComplete()
 
         then:
-        noExceptionThrown()
-        2 * httpPostObserver0.asyncHttpMessage(_)
-        4 * httpPostObserver0.asyncHttpMessage(!null, !null)
+        assert payload.workflow instanceof WorkflowMetadata
+        6 * httpPostObserver0.asyncHttpMessage(!null, !null) >> null
 
     }
 
@@ -69,10 +79,12 @@ class WebLogObserverTest extends Specification{
         observer.httpClient = CLIENT
         observer.runName = 'foo'
         observer.runId = 'xyz'
+        observer.generator = new JsonGenerator.Options().build()
         def TRACE = new TraceRecord([hash: '4a4a4a', process: 'bar'])
 
         when:
         observer.sendHttpMessage('started',  TRACE)
+
         then:
         1 * observer.logHttpResponse() >> null
         1 * CLIENT.sendHttpMessage( _ as String ) >> { it ->
@@ -80,7 +92,6 @@ class WebLogObserverTest extends Specification{
             assert message.runName == 'foo'
             assert message.runId == 'xyz'
             assert message.event == 'started'
-            assert message.runStatus == 'started'
             assert message.trace.hash == '4a4a4a'
             assert message.trace.process == 'bar'
             return null

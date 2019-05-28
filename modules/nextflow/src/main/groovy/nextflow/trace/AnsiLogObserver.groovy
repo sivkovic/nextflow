@@ -18,6 +18,9 @@ package nextflow.trace
 
 
 import groovy.transform.CompileStatic
+import groovy.transform.EqualsAndHashCode
+import groovy.util.logging.Slf4j
+import jline.TerminalFactory
 import nextflow.Session
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskProcessor
@@ -26,6 +29,9 @@ import org.fusesource.jansi.Ansi
 import org.fusesource.jansi.AnsiConsole
 import static org.fusesource.jansi.Ansi.Color
 import static org.fusesource.jansi.Ansi.ansi
+
+import static nextflow.util.LoggerHelper.isHashLogPrefix
+
 /**
  * Implements an observer which display workflow
  * execution progress and notifications using
@@ -33,20 +39,23 @@ import static org.fusesource.jansi.Ansi.ansi
  *
  * @author Paolo Di Tommaso <paolo.ditommaso@gmail.com>
  */
+@Slf4j
 @CompileStatic
 class AnsiLogObserver implements TraceObserver {
 
     static final private String NEWLINE = System.getProperty("line.separator")
 
+    @EqualsAndHashCode
     static class ProcessStats {
         int submitted
         int cached
+        int stored
         int failed
         int completed
         boolean terminated
         String hash
         boolean error
-        boolean changed
+        String name
     }
 
     static class Event {
@@ -82,17 +91,23 @@ class AnsiLogObserver implements TraceObserver {
 
     private volatile boolean dirty
 
+    private volatile boolean rendered
+
     private int printedLines
 
-    private int maxNameLength
+    private int labelWidth
+
+    private int cols = 80
 
     private long startTimestamp
 
     private long endTimestamp
 
+    private Boolean enableSummary = System.getenv('NXF_ANSI_SUMMARY') as Boolean
+
     synchronized void appendInfo(String message) {
         boolean warn
-        if( message.startsWith('[') && !(warn=message.indexOf('NOTE:')>0) )
+        if( isHashLogPrefix(message) && !(warn=message.indexOf('NOTE:')>0) )
             return
         
         if( !started || !processes ) {
@@ -123,16 +138,19 @@ class AnsiLogObserver implements TraceObserver {
         else {
             errors << new Event(message)
             dirty = true
+            notify()
         }
     }
 
     protected void render0(dummy) {
         while(!stopped) {
             if( dirty ) renderProgress()
-            sleep 200
+            synchronized (this) {
+                wait(200)
+            }
         }
         renderProgress()
-        renderEpilog()
+        renderSummary()
     }
 
     protected void renderMessages( Ansi term, List<Event> allMessages, Color color=null )  {
@@ -177,10 +195,26 @@ class AnsiLogObserver implements TraceObserver {
     }
 
     protected void renderProcesses(Ansi term) {
+        if( !processes || (!session.isSuccess() && errors && !rendered) ) {
+            // prevent to show a useless process progress if there's an error
+            // on startup and the execution is terminated
+            return
+        }
+
+        cols = TerminalFactory.get().getWidth()
+
+        // calc max width
+        labelWidth = 0
         for( Map.Entry<String,ProcessStats> entry : processes ) {
-            term.a(line(entry.key,entry.value))
+            labelWidth = Math.max(labelWidth, entry.value.name.size())
+        }
+
+        // render line
+        for( Map.Entry<String,ProcessStats> entry : processes ) {
+            term.a(line(entry.value))
             term.newline()
         }
+        rendered = true
     }
 
     protected void renderErrors( Ansi term ) {
@@ -215,10 +249,15 @@ class AnsiLogObserver implements TraceObserver {
         AnsiConsole.out.flush()
     }
 
-    protected void renderEpilog() {
+    protected void renderSummary() {
+        final delta = endTimestamp-startTimestamp
+        if( enableSummary == false )
+            return
+        if( enableSummary == null && delta <= 60*1_000 )
+            return
+        
         WorkflowStats stats = session.isSuccess() ? session.getWorkflowStats() : null
         if( stats && processes.size() ) {
-            final delta = endTimestamp-startTimestamp
             def report = ""
             report += "Completed at: ${new Date(endTimestamp).format('dd-MMM-yyyy HH:mm:ss')}\n"
             report += "Duration    : ${new Duration(delta)}\n"
@@ -251,38 +290,60 @@ class AnsiLogObserver implements TraceObserver {
         AnsiConsole.out.print(text)
     } 
 
-    protected String line(String name, ProcessStats stats) {
-        final float tot = stats.submitted + stats.cached
-        final float com = stats.completed + stats.cached
-        final label = name.padRight(maxNameLength)
+    protected String fmtWidth(String name, int width, int cols) {
+        assert name.size() <= width
+        // chop the name string if larger than max cols
+        if( name.size() > cols ) {
+            return fmtChop(name,cols)
+        }
+        // otherwise pad with blanks to the expected width
+        return name.padRight(Math.min(width,cols))
+    }
+
+    protected String fmtChop(String str, int cols) {
+        if( str.size() <= cols )
+            return str
+        return cols>3 ? str[0..(cols-3-1)] + '...' : str[0..cols-1]
+    }
+
+    protected String line(ProcessStats stats) {
+        final float tot = stats.submitted +stats.cached +stats.stored
+        final float com = stats.completed +stats.cached +stats.stored
+        final label = fmtWidth(stats.name, labelWidth, Math.max(cols-50, 5))
+        final hh = (stats.hash && tot>0 ? stats.hash : '-').padRight(9)
+
+        if( tot == 0  )
+            return "[$hh] process > $label -"
 
         final x = tot ? Math.round(com / tot * 100f) : 0
         final pct = "[${String.valueOf(x).padLeft(3)}%]".toString()
 
         final numbs = "${(int)com} of ${(int)tot}".toString()
-        def result = "[$stats.hash] process > $label $pct $numbs"
+        def result = "[${hh}] process > $label $pct $numbs"
         if( stats.cached )
             result += ", cached: $stats.cached"
+        if( stats.stored )
+            result += ", stored: $stats.stored"
         if( stats.failed )
             result += ", failed: $stats.failed"
         if( stats.terminated && tot )
             result += stats.error ? ' \u2718' : ' \u2714'
-        return result
+        return fmtChop(result, cols)
     }
 
 
-    private ProcessStats p0(String name) {
+    private ProcessStats proc0(String name) {
         def result = processes.get(name)
         if( !result ) {
             result = new ProcessStats()
+            result.name = name
             processes.put(name, result)
-            maxNameLength = Math.max(maxNameLength, name.size())
         }
         return result
     }
 
-    private ProcessStats p0(TaskHandler handler) {
-        p0(handler.task.processor.name)
+    private ProcessStats proc0(TaskHandler handler) {
+        proc0(handler.task.processor.name)
     }
 
     @Override
@@ -301,16 +362,22 @@ class AnsiLogObserver implements TraceObserver {
         renderer.join()
     }
 
+    @Override
+    synchronized void onProcessCreate(TaskProcessor processor) {
+        proc0(processor.name)
+        dirty = true
+    }
+
     /**
      * This method is invoked before a process run is going to be submitted
      * @param handler
      */
     @Override
     synchronized void onProcessSubmit(TaskHandler handler, TraceRecord trace){
-        final process = p0(handler)
+        final process = proc0(handler)
         process.submitted++
         process.hash = handler.task.hashLog
-        process.changed = true
+        process.name = handler.task.name
         // executor counter
         final exec = handler.task.processor.executor.name
         Integer count = executors[exec] ?: 0
@@ -320,10 +387,10 @@ class AnsiLogObserver implements TraceObserver {
 
     @Override
     synchronized void onProcessComplete(TaskHandler handler, TraceRecord trace){
-        final process = p0(handler)
+        final process = proc0(handler)
         process.completed++
         process.hash = handler.task.hashLog
-        process.changed = true
+        process.name = handler.task.name
         if( handler.task.aborted || handler.task.failed ) {
             process.failed++
             process.error |= !handler.task.errorAction?.soft
@@ -342,10 +409,16 @@ class AnsiLogObserver implements TraceObserver {
 
     @Override
     synchronized void onProcessCached(TaskHandler handler, TraceRecord trace){
-        final process = p0(handler)
-        process.cached++
-        process.hash = handler.task.hashLog
-        process.changed = true
+        final process = proc0(handler)
+        process.name = handler.task.name
+        if( trace ) {
+            process.cached++
+            process.hash = handler.task.hashLog
+        }
+        else {
+            process.stored++
+            process.hash = 'skipped'
+        }
         dirty = true
     }
 

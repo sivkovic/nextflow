@@ -249,7 +249,7 @@ Read more at these links:
 IntelliJ IDEA
 ---------------
 
-Nextflow development with [IntelliJ IDEA](https://www.jetbrains.com/idea/) requires the latest version of the IDE (2018.3 or higher).
+Nextflow development with [IntelliJ IDEA](https://www.jetbrains.com/idea/) requires the latest version of the IDE (2019.1.2 or later).
 
 If you have it installed in your computer, follow the steps below in order to use it with Nextflow:
 
@@ -261,6 +261,7 @@ If you have it installed in your computer, follow the steps below in order to us
 6. When the import process complete, select the "Project structure" command in the "File" menu bar.
 7. In the showed dialog click on the "Project" item in the list of the left, and make sure that
    the "Project SDK" choice on the right contains Java 8.
+8. Set the code formatting options with setting provided [here](https://github.com/nextflow-io/nextflow/blob/master/CONTRIBUTING.md#ide-settings).
 
 
 
@@ -268,8 +269,6 @@ Contributing
 ============
 
 Project contribution are more than welcome. See the [CONTRIBUTING](CONTRIBUTING.md) file for details.
-
-Information on setting up your development environment to work on *Nextflow* can be found [here](BuildFromSource.md)
 
 
 Build servers

@@ -29,9 +29,9 @@ import groovy.transform.Memoized
 import groovy.transform.stc.ClosureParams
 import groovy.transform.stc.FirstParam
 import nextflow.file.FileHelper
+import nextflow.file.FileMutex
 import nextflow.util.CheckHelper
 import nextflow.util.Duration
-import nextflow.file.FileMutex
 import nextflow.util.MemoryUnit
 import nextflow.util.RateUnit
 import org.apache.commons.lang.StringUtils
@@ -40,7 +40,6 @@ import org.codehaus.groovy.runtime.GStringImpl
 import org.codehaus.groovy.runtime.ResourceGroovyMethods
 import org.codehaus.groovy.runtime.StringGroovyMethods
 import org.slf4j.Logger
-
 /**
  * Generic extensions
  *
@@ -79,7 +78,7 @@ class Bolts {
      * @param tz The timezone to be used eg. {@code UTC}. If {@code null} the current timezone is used.
      * @return The date-time formatted as a string
      */
-    static format(Date self, String format=null, String tz=null) {
+    static String format(Date self, String format=null, String tz=null) {
         TimeZone zone = tz ? TimeZone.getTimeZone(tz) : null
         getLocalDateFormat(format ?: DATETIME_FORMAT, zone).get().format(self)
     }
@@ -92,7 +91,7 @@ class Bolts {
      * @param tz The timezone to be used. If {@code null} the current timezone is used.
      * @return The date-time formatted as a string
      */
-    static format(Date self, String format, TimeZone tz) {
+    static String format(Date self, String format, TimeZone tz) {
         getLocalDateFormat(format ?: DATETIME_FORMAT, tz).get().format(self)
     }
 
@@ -426,7 +425,7 @@ class Bolts {
      * @param type
      * @return
      */
-    static Object asType( String self, Class type ) {
+    static Object asType( String self, Class<Object> type ) {
         if( type == Duration ) {
             return new Duration(self)
         }
@@ -450,7 +449,7 @@ class Bolts {
      * @param type
      * @return
      */
-    static Object asType( GString self, Class type ) {
+    static Object asType( GString self, Class<Object> type ) {
         if( type == Duration ) {
             return new Duration(self.toString())
         }
@@ -488,7 +487,7 @@ class Bolts {
      * @param type
      * @return
      */
-    static Object asType( File self, Class type ) {
+    static Object asType( File self, Class<Object> type ) {
         if( Path.isAssignableFrom(type) ) {
             return self.toPath()
         }
@@ -549,7 +548,6 @@ class Bolts {
 
         return closure ? closure(current) : current
     }
-
 
     static def navigate(Map self, String key, defValue) {
         def result = navigate(self,key)
@@ -697,11 +695,11 @@ class Bolts {
      * @param binding A {@link Map} object that is set as delegate object in the cloned closure.
      * @return The cloned {@link GString} instance
      */
-    static GString cloneWith( GString self, binding ) {
+    static GString cloneAsLazy(GString self, binding ) {
 
         def values = new Object[ self.valueCount ]
 
-        // clone the gstring setting the delegate for each closure argument
+        // clone the GString setting the delegate for each closure argument
         for( int i=0; i<self.valueCount; i++ ) {
             values[i] = ( self.values[i] instanceof Closure
                     ? cloneWith(self.values[i] as Closure, binding)

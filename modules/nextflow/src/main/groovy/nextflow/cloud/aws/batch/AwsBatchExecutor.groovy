@@ -25,7 +25,6 @@ import groovy.transform.CompileDynamic
 import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
-import nextflow.Nextflow
 import nextflow.cloud.aws.AmazonCloudDriver
 import nextflow.exception.AbortOperationException
 import nextflow.executor.Executor
@@ -51,22 +50,26 @@ class AwsBatchExecutor extends Executor {
      * Proxy to throttle AWS batch client requests
      */
     @PackageScope
-    private static AwsBatchProxy client
+    private AwsBatchProxy client
 
     /**
      * executor service to throttle service requests
      */
-    private static ThrottlingExecutor submitter
+    private ThrottlingExecutor submitter
 
     /**
      * Executor service to throttle cancel requests
      */
-    private static ThrottlingExecutor reaper
+    private ThrottlingExecutor reaper
 
     /**
      * A S3 path where executable scripts need to be uploaded
      */
-    private static Path remoteBinDir = null
+    private Path remoteBinDir = null
+
+    private AwsOptions awsOptions
+
+    AwsOptions getAwsOptions() {  awsOptions  }
 
     /**
      * @return {@code true} to signal containers are managed directly the AWS Batch service
@@ -84,7 +87,7 @@ class AwsBatchExecutor extends Executor {
      * Initialise the AWS batch executor.
      */
     @Override
-    void register() {
+    protected void register() {
         super.register()
 
         /*
@@ -119,6 +122,9 @@ class AwsBatchExecutor extends Executor {
          * create a proxy for the aws batch client that manages the request throttling 
          */
         client = new AwsBatchProxy(driver.getBatchClient(), submitter)
+
+        // create the options object
+        awsOptions = new AwsOptions(this)
     }
 
     @PackageScope

@@ -33,7 +33,6 @@ import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import groovyx.gpars.agent.Agent
 import groovyx.gpars.dataflow.Dataflow
-import groovyx.gpars.dataflow.DataflowChannel
 import groovyx.gpars.dataflow.DataflowQueue
 import groovyx.gpars.dataflow.DataflowReadChannel
 import groovyx.gpars.dataflow.DataflowWriteChannel
@@ -57,28 +56,31 @@ import nextflow.exception.ProcessUnrecoverableException
 import nextflow.exception.ShowOnlyExceptionMessage
 import nextflow.executor.CachedTaskHandler
 import nextflow.executor.Executor
+import nextflow.executor.StoredTaskHandler
+import nextflow.extension.ChannelFactory
 import nextflow.extension.DataflowHelper
 import nextflow.file.FileHelper
 import nextflow.file.FileHolder
 import nextflow.file.FilePatternSplitter
 import nextflow.script.BaseScript
-import nextflow.script.BasicMode
-import nextflow.script.EachInParam
-import nextflow.script.EnvInParam
-import nextflow.script.FileInParam
-import nextflow.script.FileOutParam
-import nextflow.script.InParam
-import nextflow.script.MissingParam
-import nextflow.script.OptionalParam
-import nextflow.script.OutParam
+import nextflow.script.params.BasicMode
+import nextflow.script.params.EachInParam
+import nextflow.script.params.EnvInParam
+import nextflow.script.params.FileInParam
+import nextflow.script.params.FileOutParam
+import nextflow.script.params.InParam
+import nextflow.script.params.MissingParam
+import nextflow.script.params.OptionalParam
+import nextflow.script.params.OutParam
+import nextflow.script.ProcessConfig
 import nextflow.script.ScriptType
-import nextflow.script.SetInParam
-import nextflow.script.SetOutParam
-import nextflow.script.StdInParam
-import nextflow.script.StdOutParam
+import nextflow.script.params.SetInParam
+import nextflow.script.params.SetOutParam
+import nextflow.script.params.StdInParam
+import nextflow.script.params.StdOutParam
 import nextflow.script.TaskBody
-import nextflow.script.ValueInParam
-import nextflow.script.ValueOutParam
+import nextflow.script.params.ValueInParam
+import nextflow.script.params.ValueOutParam
 import nextflow.util.ArrayBag
 import nextflow.util.BlankSeparatedList
 import nextflow.util.CacheHelper
@@ -259,7 +261,6 @@ class TaskProcessor {
         this.config = config
         this.taskBody = taskBody
         this.name = name
-
     }
 
     /**
@@ -752,10 +753,10 @@ class TaskProcessor {
             // -- check if all output resources are available
             collectOutputs(task)
             log.info "[skipping] Stored process > ${task.name}"
-
             // set the exit code in to the task object
             task.exitStatus = exit
             task.cached = true
+            session.notifyTaskCached(new StoredTaskHandler(task))
 
             // -- now bind the results
             finalizeTask0(task)
@@ -797,10 +798,6 @@ class TaskProcessor {
                 return false
             }
         }
-
-        /*
-         * load the task record in the cache DB
-         */
 
         /*
          * verify cached context map
@@ -1279,8 +1276,8 @@ class TaskProcessor {
         }
 
         // -- finally prints out the task output when 'echo' is true
-        if( task.config.echo && !session.ansiLog ) {
-            task.echoStdout()
+        if( task.config.echo ) {
+            task.echoStdout(session)
         }
     }
 
@@ -1708,8 +1705,13 @@ class TaskProcessor {
                 log.warn "Environment variable `$name` evaluates to an empty value"
                 script << "export $name=''"
             }
-            else
-                script << "export $name=\"${escape ? value.replace('$','\\$') : value}\""
+            else if( !escape ) {
+                script << /export $name="$value"/
+            }
+            else {
+                // escape both wrapping double quotes and the dollar var placeholder
+                script << /export $name=\"${value.replace('$','\\$')}\"/
+            }
         }
         script << ''
 
@@ -1940,7 +1942,7 @@ class TaskProcessor {
         makeTaskContextStage3(task, hash, folder)
 
         // add the task to the collection of running tasks
-        session.dispatcher.submit(task, blocking)
+        executor.submit(task, blocking)
 
     }
 
@@ -2077,7 +2079,7 @@ class TaskProcessor {
      */
     class BaseProcessInterceptor extends DataflowEventAdapter {
 
-        final List<DataflowChannel> inputs
+        final List<DataflowReadChannel> inputs
 
         final boolean stopAfterFirstRun
 
@@ -2087,28 +2089,29 @@ class TaskProcessor {
 
         final int first
 
-        BaseProcessInterceptor( List<DataflowChannel> inputs, boolean stop ) {
+        BaseProcessInterceptor( List<DataflowReadChannel> inputs, boolean stop ) {
             this.inputs = new ArrayList<>(inputs)
             this.stopAfterFirstRun = stop
             this.len = inputs.size()
             this.control = (DataflowQueue)inputs.get(len-1)
-            this.first = inputs.findIndexOf { it instanceof DataflowQueue }
+            this.first = inputs.findIndexOf { ChannelFactory.isChannelQueue(it) }
         }
 
         @Override
-        public Object messageArrived(final DataflowProcessor processor, final DataflowReadChannel<Object> channel, final int index, final Object message) {
+        Object messageArrived(final DataflowProcessor processor, final DataflowReadChannel<Object> channel, final int index, final Object message) {
             if( len == 1 || stopAfterFirstRun ) {
                 // -- kill itself
                 control.bind(PoisonPill.instance)
             }
             else if( index == first ) {
-                // -- keep things rolling
+                // the `if` condition guarantees only and only one signal message (the true value)
+                // is bound to the control message for a complete set of input values delivered
+                // to the process -- the control message is need to keep the process running
                 control.bind(Boolean.TRUE)
             }
 
             return message;
         }
-
     }
 
     /**
@@ -2116,7 +2119,7 @@ class TaskProcessor {
      */
     class TaskProcessorInterceptor extends BaseProcessInterceptor {
 
-        TaskProcessorInterceptor(List<DataflowChannel> inputs, boolean stop) {
+        TaskProcessorInterceptor(List<DataflowReadChannel> inputs, boolean stop) {
             super(inputs, stop)
         }
 

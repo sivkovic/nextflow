@@ -31,7 +31,8 @@ import nextflow.exception.ProcessUnrecoverableException
 import nextflow.executor.NopeExecutor
 import nextflow.file.FileHolder
 import nextflow.script.BaseScript
-import nextflow.script.FileOutParam
+import nextflow.script.params.FileOutParam
+import nextflow.script.ProcessConfig
 import nextflow.script.ScriptType
 import nextflow.script.TaskBody
 import nextflow.util.ArrayBag
@@ -776,10 +777,8 @@ class TaskProcessorTest extends Specification {
         when:
         env = TaskProcessor.bashEnvironmentScript([PATH: 'foo:$PATH'], true)
         then:
-        env == 'export PATH="foo:\\$PATH"\n'
-        env.charAt(16) == ':' as char
-        env.charAt(17) == '\\' as char
-        env.charAt(18) == '$' as char
+        env.trim() == 'export PATH=\\"foo:\\$PATH\\"'
+        env.charAt(env.size()-1) == '\n' as char
 
         when:
         env = TaskProcessor.bashEnvironmentScript([FOO:null, BAR:''])

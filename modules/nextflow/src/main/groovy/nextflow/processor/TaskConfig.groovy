@@ -21,11 +21,11 @@ import static nextflow.processor.TaskProcessor.*
 import java.nio.file.Path
 
 import groovy.transform.CompileStatic
-import groovy.transform.PackageScope
 import nextflow.Const
 import nextflow.exception.AbortOperationException
 import nextflow.exception.FailedGuardException
 import nextflow.executor.BashWrapperBuilder
+import nextflow.executor.res.GpuResource
 import nextflow.k8s.model.PodOptions
 import nextflow.script.TaskClosure
 import nextflow.util.CmdLineHelper
@@ -132,9 +132,7 @@ class TaskConfig extends LazyMap implements Cloneable {
         }
     }
 
-
-    @PackageScope
-    boolean isDynamic() {
+    protected boolean isDynamic() {
         if( super.isDynamic() )
             return true
 
@@ -349,6 +347,17 @@ class TaskConfig extends LazyMap implements Cloneable {
         new PodOptions((List)get('pod'))
     }
 
+    GpuResource getGpu() {
+        def value = get('gpu')
+        if( value instanceof Number )
+            return new GpuResource(value)
+        if( value instanceof Map )
+            return new GpuResource(value)
+        if( value != null )
+            throw new IllegalArgumentException("Invalid gpu directive value: $value [${value.getClass().getName()}]")
+        return null
+    }
+
     /**
      * Get a closure guard condition and evaluate to a boolean result
      *
@@ -499,7 +508,7 @@ class LazyMap implements Map<String,Object> {
         }
 
         else if( value instanceof GString ) {
-            return value.cloneWith(getBinding()).toString()
+            return value.cloneAsLazy(getBinding()).toString()
         }
 
         return value

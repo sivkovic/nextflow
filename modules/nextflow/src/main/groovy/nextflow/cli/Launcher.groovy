@@ -16,11 +16,7 @@
 
 package nextflow.cli
 
-import nextflow.util.Escape
-import static nextflow.Const.APP_BUILDNUM
-import static nextflow.Const.APP_NAME
-import static nextflow.Const.APP_VER
-import static nextflow.Const.SPLASH
+import static nextflow.Const.*
 
 import java.lang.reflect.Field
 
@@ -36,10 +32,12 @@ import groovy.util.logging.Slf4j
 import nextflow.exception.AbortOperationException
 import nextflow.exception.AbortRunException
 import nextflow.exception.ConfigParseException
+import nextflow.exception.ScriptRuntimeException
 import nextflow.trace.GraphObserver
 import nextflow.trace.ReportObserver
 import nextflow.trace.TimelineObserver
 import nextflow.trace.TraceFileObserver
+import nextflow.util.Escape
 import nextflow.util.LoggerHelper
 import org.codehaus.groovy.control.CompilationFailedException
 import org.eclipse.jgit.api.errors.GitAPIException
@@ -394,6 +392,10 @@ class Launcher {
             System.exit(1)
 
         }
+        catch ( AbortOperationException e ) {
+            System.err.println (e.message ?: "Unknown abort reason")
+            System.exit(1)
+        }
         catch( Throwable e ) {
             e.printStackTrace(System.err)
             System.exit(1)
@@ -480,6 +482,11 @@ class Launcher {
 
         catch( CompilationFailedException e ) {
             log.error e.message
+            return(1)
+        }
+
+        catch ( ScriptRuntimeException | IllegalArgumentException e) {
+            log.error(e.message, e)
             return(1)
         }
 
@@ -620,7 +627,7 @@ class Launcher {
      *
      * @param args The program options as specified by the user on the CLI
      */
-    public static void main(String... args)  {
+    static void main(String... args)  {
 
         final launcher = DripMain.LAUNCHER ?: new Launcher()
         final status = launcher .command(args) .run()
